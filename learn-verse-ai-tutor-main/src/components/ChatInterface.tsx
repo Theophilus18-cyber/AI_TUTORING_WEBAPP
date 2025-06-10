@@ -22,15 +22,7 @@ interface ChatInterfaceProps {
 }
 
 const ChatInterface: React.FC<ChatInterfaceProps> = ({ agent, isSpeaking, onProgressUpdate, uploadedFiles = [] }): JSX.Element => {
-  const [messages, setMessages] = useState<Message[]>([
-    {
-      id: '1',
-      content: `Hello! I'm your ${agent === 'tutor' ? 'AI Tutor' : agent === 'study' ? 'Study Agent' : agent === 'coding' ? 'Coding Agent' : 'Quiz Agent'}. How can I help you learn today?`,
-      sender: 'agent',
-      timestamp: new Date(),
-      agent
-    }
-  ]);
+  const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [isListening, setIsListening] = useState(false);
@@ -49,9 +41,44 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ agent, isSpeaking, onProg
   const recognitionRef = useRef<any>(null);
   const currentAudioRef = useRef<HTMLAudioElement | null>(null);
   const userStopped = useRef(false);
+  const [showWelcomeButton, setShowWelcomeButton] = useState(true);
+  const welcomeAudioRef = useRef<HTMLAudioElement | null>(null);
 
   // Remove hardcoded API keys
   const GEMINI_API_KEY = 'AIzaSyB0L2GbAOkUYixMxmE-vhYcx4Gc5bpo5y8';
+
+  // Add welcome message effect
+  useEffect(() => {
+    const welcomeMessage = `Welcome to LearnVerse AI Tutor! I'm your personal learning assistant. I can help you with:
+    - Answering questions about your study materials
+    - Creating quizzes to test your knowledge
+    - Breaking down complex concepts
+    - Providing detailed explanations
+    - Suggesting helpful learning resources
+    
+    Feel free to ask me anything, and don't forget you can use voice commands by clicking the microphone button. Let's make learning fun and effective together!`;
+
+    // Add welcome message to chat
+    const welcomeMsg: Message = {
+      id: 'welcome',
+      content: welcomeMessage,
+      sender: 'agent',
+      timestamp: new Date(),
+      agent
+    };
+
+    setMessages([welcomeMsg]);
+
+    // Initialize welcome audio
+    welcomeAudioRef.current = new Audio('/speech.mp3');
+    welcomeAudioRef.current.onended = () => {
+      setIsPlayingAudio(false);
+      welcomeAudioRef.current = null;
+      setShowWelcomeButton(false);
+      // Set speech enabled after welcome message
+      setSpeechEnabled(true);
+    };
+  }, []); // Empty dependency array means this runs once when component mounts
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -183,7 +210,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ agent, isSpeaking, onProg
     return prompt;
   };
 
-  const speakWithGoogleTTS = async (text: string): Promise<void> => {
+  const speakWithGeminiTTS = async (text: string): Promise<void> => {
     if (!speechEnabled) return;
 
     try {
@@ -201,12 +228,25 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ agent, isSpeaking, onProg
         },
         body: JSON.stringify({
           input: { text },
-          voice: { languageCode: 'en-US', name: 'en-US-Standard-D' },
-          audioConfig: { audioEncoding: 'MP3' }
-        }),
+          voice: {
+            languageCode: 'en-US',
+            name: 'en-US-Neural2-F',
+            ssmlGender: 'FEMALE'
+          },
+          audioConfig: {
+            audioEncoding: 'MP3',
+            speakingRate: 1.0,
+            pitch: 0.0,
+            volumeGainDb: 0.0,
+            effectsProfileId: ['large-home-entertainment-class-device']
+          }
+        })
       });
 
-      if (!response.ok) throw new Error('TTS API error');
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error?.message || 'TTS API error');
+      }
 
       const data = await response.json();
       const audio = new Audio(`data:audio/mp3;base64,${data.audioContent}`);
@@ -221,6 +261,25 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ agent, isSpeaking, onProg
     } catch (error) {
       console.error('TTS failed:', error);
       setIsPlayingAudio(false);
+      // Fallback to browser's speech synthesis with better voice settings
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.rate = 1.0;
+      utterance.pitch = 1.0;
+      utterance.volume = 1.0;
+      
+      // Try to get a better voice
+      const voices = window.speechSynthesis.getVoices();
+      const preferredVoice = voices.find(voice => 
+        voice.name.includes('Google') || 
+        voice.name.includes('Microsoft') || 
+        voice.name.includes('Samantha')
+      );
+      
+      if (preferredVoice) {
+        utterance.voice = preferredVoice;
+      }
+      
+      window.speechSynthesis.speak(utterance);
     }
   };
 
@@ -329,7 +388,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ agent, isSpeaking, onProg
       setMessages(prev => [...prev, aiResponse]);
       
       if (speechEnabled) {
-        speakWithGoogleTTS(aiResponse.content);
+        speakWithGeminiTTS(aiResponse.content);
       }
 
       const newProgress = Math.min(currentProgress + 10, 100);
@@ -378,6 +437,23 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ agent, isSpeaking, onProg
     return initials[agentType] || 'AI';
   };
 
+  const playWelcomeMessage = () => {
+    if (welcomeAudioRef.current) {
+      setIsPlayingAudio(true);
+      welcomeAudioRef.current.play().catch(error => {
+        console.error('Welcome message audio failed:', error);
+        setIsPlayingAudio(false);
+        // Fallback to browser's speech synthesis
+        const utterance = new SpeechSynthesisUtterance(welcomeMessage);
+        utterance.rate = 1.0;
+        utterance.pitch = 1.0;
+        utterance.volume = 1.0;
+        window.speechSynthesis.speak(utterance);
+        setSpeechEnabled(true);
+      });
+    }
+  };
+
   return (
     <div className="flex flex-col h-full">
       <ScrollArea ref={scrollAreaRef} className="flex-1 p-4">
@@ -407,6 +483,20 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ agent, isSpeaking, onProg
                   }`}
                 >
                   <p className="text-sm whitespace-pre-wrap">{message.content}</p>
+                  {message.id === 'welcome' && showWelcomeButton && (
+                    <Button
+                      onClick={playWelcomeMessage}
+                      className="mt-2 bg-blue-500 hover:bg-blue-600 text-white"
+                      size="sm"
+                    >
+                      {isPlayingAudio ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <Volume2 className="h-4 w-4" />
+                      )}
+                      <span className="ml-2">Play Welcome Message</span>
+                    </Button>
+                  )}
                   <span className="text-xs opacity-70 mt-1 block">
                     {message.timestamp.toLocaleTimeString()}
                   </span>
