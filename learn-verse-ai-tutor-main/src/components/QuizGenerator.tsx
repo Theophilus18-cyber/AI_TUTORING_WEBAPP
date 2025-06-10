@@ -1,4 +1,3 @@
-
 import React, { useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -32,8 +31,6 @@ const QuizGenerator: React.FC<QuizGeneratorProps> = ({ uploadedFiles = [], topic
   const [showResults, setShowResults] = useState(false);
   const [quizCompleted, setQuizCompleted] = useState(false);
 
-  const GROQ_API_KEY = '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';
-
   // Generate quiz questions from uploaded files
   const generateQuizFromFiles = async () => {
     if (uploadedFiles.length === 0) {
@@ -53,41 +50,78 @@ const QuizGenerator: React.FC<QuizGeneratorProps> = ({ uploadedFiles = [], topic
       );
 
       const combinedContent = fileContents.join('\n\n');
+      console.log('Sending content to API:', combinedContent.substring(0, 200));
 
-      // Generate questions using Groq API
-      const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${GROQ_API_KEY}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          model: 'llama-3.1-8b-instant',
-          messages: [
-            {
-              role: 'system',
-              content: 'You are a quiz generator. Create multiple choice questions based on study materials. Return exactly 5 questions in JSON format.'
-            },
-            {
-              role: 'user',
-              content: `Based on these study materials, create 5 multiple choice questions with 4 options each. Format as JSON array with structure: [{"question": "...", "options": ["A", "B", "C", "D"], "correctAnswer": 0, "explanation": "..."}]\n\nMaterials:\n${combinedContent}`
-            }
-          ],
-          temperature: 0.7,
-          max_tokens: 2000,
-        }),
-      });
+      let allQuestions: Question[] = [];
+      let attempts = 0;
+      const maxAttempts = 3;
 
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
+      while (allQuestions.length < 10 && attempts < maxAttempts) {
+        attempts++;
+        console.log(`Attempt ${attempts} to generate questions...`);
+
+        // Use the backend API endpoint for quiz generation
+        const response = await fetch('http://localhost:3001/api/chat', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            message: `Create a quiz with ${10 - allQuestions.length} multiple choice questions based on these study materials. Each question must have 4 options (A, B, C, D), include a clear explanation for the correct answer, and specify difficulty level (easy/medium/hard). Format the response as a JSON array with this exact structure: [{"question": "...", "options": ["A", "B", "C", "D"], "correctAnswer": 0, "explanation": "...", "difficulty": "easy|medium|hard"}]. Do not include any additional text before or after the JSON array. Make sure the JSON is complete and properly formatted. Focus on different aspects of the material than previous questions.\n\nMaterials:\n${combinedContent}`,
+            agent: 'quiz',
+            conversationHistory: []
+          }),
+        });
+
+        console.log('API Response status:', response.status);
+
+        if (!response.ok) {
+          const errorData = await response.json();
+          console.error('API Error Response:', errorData);
+          throw new Error(errorData.details || errorData.error || 'Failed to get response from server');
+        }
+
+        const data = await response.json();
+        console.log('API Response data:', data);
+        
+        if (!data.success || !data.response) {
+          console.error('Invalid API Response:', data);
+          throw new Error('Invalid response format from server');
+        }
+
+        // Parse the JSON response from the quiz
+        const parsedQuestions = parseQuestions(data.response);
+        console.log('Parsed Questions:', parsedQuestions);
+        
+        if (parsedQuestions.length === 0) {
+          console.error('No questions parsed from response:', data.response);
+          if (attempts === maxAttempts) {
+            throw new Error('No valid questions were generated after multiple attempts');
+          }
+          continue;
+        }
+
+        // Add new questions to our collection, avoiding duplicates
+        const newQuestions = parsedQuestions.filter(newQ => 
+          !allQuestions.some(existingQ => 
+            existingQ.question.toLowerCase() === newQ.question.toLowerCase()
+          )
+        );
+
+        allQuestions = [...allQuestions, ...newQuestions];
+        console.log(`Total questions collected: ${allQuestions.length}`);
       }
 
-      const data = await response.json();
-      const aiResponse = data.choices[0]?.message?.content || '';
+      if (allQuestions.length < 10) {
+        console.warn(`Generated only ${allQuestions.length} questions after ${maxAttempts} attempts`);
+        toast.warning(`Generated ${allQuestions.length} questions instead of 10. Please try again.`);
+        throw new Error('Insufficient number of questions generated');
+      }
+
+      // Take exactly 10 questions
+      const finalQuestions = allQuestions.slice(0, 10);
       
-      // Parse the JSON response
-      const parsedQuestions = parseQuestions(aiResponse);
-      setQuestions(parsedQuestions);
+      setQuestions(finalQuestions);
       setCurrentQuestionIndex(0);
       setSelectedAnswers({});
       setShowResults(false);
@@ -96,18 +130,19 @@ const QuizGenerator: React.FC<QuizGeneratorProps> = ({ uploadedFiles = [], topic
       toast.success('Quiz generated successfully!');
     } catch (error) {
       console.error('Error generating quiz:', error);
-      toast.error('Failed to generate quiz. Using sample questions.');
-      // Fallback to sample questions
-      setQuestions([
-        {
-          id: '1',
-          question: 'Based on your uploaded materials, what is the main topic?',
-          options: ['Topic A', 'Topic B', 'Topic C', 'Topic D'],
-          correctAnswer: 0,
-          explanation: 'This question is based on your uploaded study materials.',
-          difficulty: 'medium'
-        }
-      ]);
+      // Show more specific error message
+      if (error.message.includes('Failed to get response from server')) {
+        toast.error('Server error. Please check if the backend is running.');
+      } else if (error.message.includes('Invalid response format')) {
+        toast.error('Invalid response from server. Please try again.');
+      } else if (error.message.includes('No valid questions')) {
+        toast.error('Could not generate valid questions. Please try again.');
+      } else if (error.message.includes('Insufficient number of questions')) {
+        toast.error('Generated fewer questions than expected. Please try again.');
+      } else {
+        toast.error(`Error: ${error.message}. Please try again.`);
+      }
+      setQuestions([]);
     } finally {
       setIsGenerating(false);
     }
@@ -132,34 +167,93 @@ const QuizGenerator: React.FC<QuizGeneratorProps> = ({ uploadedFiles = [], topic
 
   const parseQuestions = (aiResponse: string): Question[] => {
     try {
-      // Try to extract JSON from the response
-      const jsonMatch = aiResponse.match(/\[[\s\S]*\]/);
-      if (jsonMatch) {
-        const parsed = JSON.parse(jsonMatch[0]);
-        return parsed.map((q: any, index: number) => ({
+      console.log('Parsing AI Response:', aiResponse);
+      
+      // First try to find JSON array in the response
+      let jsonStr = aiResponse;
+      
+      // If the response contains markdown code block, extract the JSON from it
+      const codeBlockMatch = aiResponse.match(/```(?:json)?\s*([\s\S]*?)```/);
+      if (codeBlockMatch) {
+        jsonStr = codeBlockMatch[1].trim();
+      } else {
+        // If no code block, try to find JSON array directly
+        const jsonMatch = aiResponse.match(/\[\s*\{[\s\S]*?\}\s*\]/);
+        if (jsonMatch) {
+          jsonStr = jsonMatch[0];
+        }
+      }
+
+      if (!jsonStr) {
+        console.error('No JSON array found in response');
+        return [];
+      }
+
+      // Try to fix common JSON formatting issues
+      jsonStr = jsonStr
+        .replace(/\n/g, ' ') // Remove newlines
+        .replace(/\s+/g, ' ') // Normalize whitespace
+        .replace(/,(\s*[}\]])/g, '$1') // Remove trailing commas
+        .replace(/([^\\])"/g, '$1\\"') // Escape unescaped quotes
+        .replace(/\\"/g, '"'); // Fix double-escaped quotes
+
+      console.log('Cleaned JSON string:', jsonStr);
+      
+      let parsed;
+      try {
+        parsed = JSON.parse(jsonStr);
+      } catch (parseError) {
+        console.error('JSON parse error:', parseError);
+        // Try to extract valid questions from partial JSON
+        const questionMatches = jsonStr.match(/\{[^}]+\}/g);
+        if (questionMatches) {
+          parsed = questionMatches
+            .map(match => {
+              try {
+                return JSON.parse(match);
+              } catch (e) {
+                return null;
+              }
+            })
+            .filter(Boolean);
+        } else {
+          return [];
+        }
+      }
+
+      if (!Array.isArray(parsed) || parsed.length === 0) {
+        console.error('Invalid question format - not an array or empty array');
+        return [];
+      }
+
+      const questions = parsed.map((q: any, index: number) => {
+        // Validate each question
+        if (!q.question || !Array.isArray(q.options) || q.options.length !== 4) {
+          console.error(`Invalid question format at index ${index}:`, q);
+          return null;
+        }
+
+        // Clean up options (remove A., B., etc. if present)
+        const cleanOptions = q.options.map((opt: string) => {
+          return opt.replace(/^[A-D]\.\s*/, '').trim();
+        });
+
+        return {
           id: (index + 1).toString(),
-          question: q.question || 'Sample question',
-          options: q.options || ['Option A', 'Option B', 'Option C', 'Option D'],
+          question: q.question.trim(),
+          options: cleanOptions,
           correctAnswer: q.correctAnswer || 0,
           explanation: q.explanation || 'Explanation not provided',
-          difficulty: 'medium' as const
-        }));
-      }
+          difficulty: q.difficulty || 'medium'
+        };
+      }).filter(Boolean); // Remove any null questions
+
+      console.log('Successfully parsed questions:', questions);
+      return questions;
     } catch (error) {
       console.error('Error parsing questions:', error);
+      return [];
     }
-    
-    // Fallback questions
-    return [
-      {
-        id: '1',
-        question: 'Based on your study materials, what would be a key concept to remember?',
-        options: ['Concept A', 'Concept B', 'Concept C', 'Concept D'],
-        correctAnswer: 0,
-        explanation: 'This is based on your uploaded materials.',
-        difficulty: 'medium'
-      }
-    ];
   };
 
   if (questions.length === 0) {
@@ -283,9 +377,7 @@ const QuizGenerator: React.FC<QuizGeneratorProps> = ({ uploadedFiles = [], topic
         <CardContent className="text-center space-y-6">
           <div>
             <div className="text-4xl font-bold text-blue-600 mb-2">{score}%</div>
-            <p className="text-lg text-gray-600">
-              You got {Object.values(selectedAnswers).filter((answer, index) => answer === questions[index].correctAnswer).length} out of {totalQuestions} questions correct!
-            </p>
+         
           </div>
           
           <div className="bg-gray-50 rounded-lg p-4">

@@ -3,7 +3,8 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
-import { Send, Loader2, User, Mic, MicOff, Volume2, VolumeX } from 'lucide-react';
+import { Send, Loader2, User, Mic, MicOff, Volume2, VolumeX, Video, VideoOff } from 'lucide-react';
+import VideoSuggestions from './videosuggestor';
 
 interface Message {
   id: string;
@@ -20,7 +21,7 @@ interface ChatInterfaceProps {
   uploadedFiles?: File[];
 }
 
-const ChatInterface: React.FC<ChatInterfaceProps> = ({ agent, isSpeaking, onProgressUpdate, uploadedFiles = [] }) => {
+const ChatInterface: React.FC<ChatInterfaceProps> = ({ agent, isSpeaking, onProgressUpdate, uploadedFiles = [] }): JSX.Element => {
   const [messages, setMessages] = useState<Message[]>([
     {
       id: '1',
@@ -39,13 +40,17 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ agent, isSpeaking, onProg
   const [speechError, setSpeechError] = useState<string>('');
   const [microphonePermission, setMicrophonePermission] = useState<'granted' | 'denied' | 'prompt'>('prompt');
   
+  // Video suggestions state
+  const [showVideoSuggestions, setShowVideoSuggestions] = useState(false);
+  const [lastUserMessage, setLastUserMessage] = useState('');
+  
   const scrollAreaRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const recognitionRef = useRef<any>(null);
   const currentAudioRef = useRef<HTMLAudioElement | null>(null);
   const userStopped = useRef(false);
 
-  const GROQ_API_KEY = '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';
+  // Remove hardcoded API keys
   const GEMINI_API_KEY = 'AIzaSyB0L2GbAOkUYixMxmE-vhYcx4Gc5bpo5y8';
 
   useEffect(() => {
@@ -270,65 +275,61 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ agent, isSpeaking, onProg
     }
   };
 
-  const sendMessage = async () => {
-    if (!input.trim() || isLoading) return;
+  const toggleVideoSuggestions = () => {
+    setShowVideoSuggestions(!showVideoSuggestions);
+  };
 
-    const userMessage: Message = {
-      id: Date.now().toString(),
+  const sendMessage = async () => {
+    if (!input.trim()) return;
+
+    const newMessage: Message = {
+      id: (Date.now() + 1).toString(),
       content: input,
       sender: 'user',
-      timestamp: new Date()
+      timestamp: new Date(),
     };
 
-    setMessages(prev => [...prev, userMessage]);
+    setMessages(prev => [...prev, newMessage]);
+    setLastUserMessage(input);
     setInput('');
     setIsLoading(true);
 
     try {
-      const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+      const response = await fetch('http://localhost:3001/api/chat', {
         method: 'POST',
         headers: {
-          'Authorization': `Bearer ${GROQ_API_KEY}`,
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          model: 'llama-3.1-8b-instant',
-          messages: [
-            {
-              role: 'system',
-              content: getAgentPrompt(agent)
-            },
-            ...messages.slice(-10).map(msg => ({
-              role: msg.sender === 'user' ? 'user' : 'assistant',
-              content: msg.content
-            })),
-            {
-              role: 'user',
-              content: input
-            }
-          ],
-          temperature: 0.7,
-          max_tokens: 1000,
+          message: newMessage.content,
+          agent,
+          conversationHistory: messages
         }),
       });
 
-      if (!response.ok) throw new Error('API error');
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.details || errorData.error || 'Failed to get response from server');
+      }
 
       const data = await response.json();
-      const agentResponse = data.choices[0]?.message?.content || 'Sorry, I could not process your request.';
+      
+      if (!data.success || !data.response) {
+        throw new Error('Invalid response format from server');
+      }
 
-      const agentMessage: Message = {
+      const aiResponse: Message = {
         id: (Date.now() + 1).toString(),
-        content: agentResponse,
+        content: data.response,
         sender: 'agent',
         timestamp: new Date(),
         agent
       };
 
-      setMessages(prev => [...prev, agentMessage]);
+      setMessages(prev => [...prev, aiResponse]);
       
       if (speechEnabled) {
-        speakWithGoogleTTS(agentResponse);
+        speakWithGoogleTTS(aiResponse.content);
       }
 
       const newProgress = Math.min(currentProgress + 10, 100);
@@ -337,13 +338,14 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ agent, isSpeaking, onProg
 
     } catch (error) {
       console.error('Error:', error);
-      setMessages(prev => [...prev, {
+      const errorMessage: Message = {
         id: (Date.now() + 1).toString(),
-        content: 'Sorry, I encountered an error. Please try again.',
+        content: `Error: ${error.message}. Please try again.`,
         sender: 'agent',
         timestamp: new Date(),
         agent
-      }]);
+      };
+      setMessages(prev => [...prev, errorMessage]);
     } finally {
       setIsLoading(false);
     }
@@ -376,105 +378,111 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ agent, isSpeaking, onProg
     return initials[agentType] || 'AI';
   };
 
-  const isSpeechSupported = 'webkitSpeechRecognition' in window || 'SpeechRecognition' in window;
-
   return (
-    <div className="flex flex-col h-[500px]">
-      <ScrollArea className="flex-1 p-4" ref={scrollAreaRef}>
+    <div className="flex flex-col h-full">
+      <ScrollArea ref={scrollAreaRef} className="flex-1 p-4">
         <div className="space-y-4">
           {messages.map((message) => (
-            <div key={message.id} className={`flex ${message.sender === 'user' ? 'justify-end' : 'justify-start'}`}>
-              <div className={`flex max-w-[80%] ${message.sender === 'user' ? 'flex-row-reverse' : 'flex-row'} items-start space-x-2`}>
-                <Avatar className="w-8 h-8 mt-1">
-                  <AvatarFallback className={`text-white text-xs ${message.sender === 'user' ? 'bg-gray-500' : getAgentColor(message.agent || agent)}`}>
-                    {message.sender === 'user' ? <User className="w-4 h-4" /> : getAgentInitial(message.agent || agent)}
+            <div
+              key={message.id}
+              className={`flex ${
+                message.sender === 'user' ? 'justify-end' : 'justify-start'
+              }`}
+            >
+              <div
+                className={`flex items-start space-x-2 max-w-[80%] ${
+                  message.sender === 'user' ? 'flex-row-reverse space-x-reverse' : ''
+                }`}
+              >
+                <Avatar className={`${message.sender === 'user' ? 'bg-gray-200' : getAgentColor(message.agent || agent)}`}>
+                  <AvatarFallback>
+                    {message.sender === 'user' ? 'U' : getAgentInitial(message.agent || agent)}
                   </AvatarFallback>
                 </Avatar>
-                <div className={`rounded-lg px-4 py-3 ${message.sender === 'user' ? 'bg-blue-500 text-white' : 'bg-gray-100 text-gray-900'}`}>
-                  <div className="text-sm whitespace-pre-wrap">{message.content}</div>
-                  <div className={`text-xs mt-1 ${message.sender === 'user' ? 'text-blue-100' : 'text-gray-500'}`}>
-                    {message.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                  </div>
+                <div
+                  className={`rounded-lg p-3 ${
+                    message.sender === 'user'
+                      ? 'bg-blue-500 text-white'
+                      : 'bg-gray-100 text-gray-900'
+                  }`}
+                >
+                  <p className="text-sm whitespace-pre-wrap">{message.content}</p>
+                  <span className="text-xs opacity-70 mt-1 block">
+                    {message.timestamp.toLocaleTimeString()}
+                  </span>
                 </div>
               </div>
             </div>
           ))}
-          {isLoading && (
-            <div className="flex justify-start">
-              <div className="flex items-start space-x-2">
-                <Avatar className="w-8 h-8 mt-1">
-                  <AvatarFallback className={`text-white text-xs ${getAgentColor(agent)}`}>
-                    {getAgentInitial(agent)}
-                  </AvatarFallback>
-                </Avatar>
-                <div className="bg-gray-100 rounded-lg px-4 py-3">
-                  <div className="flex items-center space-x-2">
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                    <span className="text-sm text-gray-600">Thinking...</span>
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
           <div ref={messagesEndRef} />
         </div>
       </ScrollArea>
-      
-      <div className="border-t p-4 bg-white">
-        <div className="flex items-center space-x-2 mb-2">
+
+      {showVideoSuggestions && (
+        <VideoSuggestions
+          lastUserMessage={lastUserMessage}
+          agent={agent}
+          isVisible={showVideoSuggestions}
+          onClose={() => setShowVideoSuggestions(false)}
+          conversationHistory={messages}
+        />
+      )}
+
+      <div className="p-4 border-t">
+        <div className="flex items-center space-x-2">
           <Button
-            variant="outline"
-            size="sm"
+            variant="ghost"
+            size="icon"
             onClick={toggleSpeech}
-            className={`${speechEnabled ? 'bg-green-100 text-green-700' : 'bg-gray-100'} ${isPlayingAudio ? 'animate-pulse' : ''}`}
+            className={speechEnabled ? 'text-blue-500' : 'text-gray-500'}
           >
-            {speechEnabled ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}
-            {isPlayingAudio && <span className="ml-1 text-xs">Speaking...</span>}
+            {speechEnabled ? <Volume2 className="h-5 w-5" /> : <VolumeX className="h-5 w-5" />}
           </Button>
-          
-          {isSpeechSupported && (
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={isListening ? stopListening : startListening}
-              className={`${isListening ? 'bg-red-100 text-red-700 animate-pulse' : 'bg-gray-100'} ${microphonePermission === 'denied' ? 'cursor-not-allowed' : ''}`}
-              disabled={microphonePermission === 'denied'}
-            >
-              {isListening ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
-              {isListening && <span className="ml-1 text-xs">Listening</span>}
-            </Button>
-          )}
-        </div>
-        
-        {speechError && (
-          <div className="mb-2 p-2 bg-yellow-100 border border-yellow-300 rounded text-sm text-yellow-800">
-            {speechError}
-          </div>
-        )}
-        
-        {microphonePermission === 'denied' && (
-          <div className="mb-2 p-2 bg-red-100 border border-red-300 rounded text-sm text-red-800">
-            Microphone access is blocked. Please update your browser settings to use voice input.
-          </div>
-        )}
-        
-        <div className="flex space-x-2">
+
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={startListening}
+            disabled={isListening || microphonePermission === 'denied'}
+            className={isListening ? 'text-red-500' : 'text-gray-500'}
+          >
+            {isListening ? <Mic className="h-5 w-5" /> : <MicOff className="h-5 w-5" />}
+          </Button>
+
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={toggleVideoSuggestions}
+            className={showVideoSuggestions ? 'text-blue-500' : 'text-gray-500'}
+          >
+            {showVideoSuggestions ? <Video className="h-5 w-5" /> : <VideoOff className="h-5 w-5" />}
+          </Button>
+
           <Input
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyPress={handleKeyPress}
-            placeholder={`Type your message... ${isSpeechSupported ? '(or press mic to speak)' : ''}`}
-            disabled={isLoading}
+            placeholder="Type your message..."
             className="flex-1"
+            disabled={isLoading}
           />
-          <Button 
-            onClick={sendMessage} 
-            disabled={isLoading || !input.trim()}
-            className="shrink-0"
+
+          <Button
+            onClick={sendMessage}
+            disabled={!input.trim() || isLoading}
+            className="bg-blue-500 hover:bg-blue-600"
           >
-            {isLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+            {isLoading ? (
+              <Loader2 className="h-5 w-5 animate-spin" />
+            ) : (
+              <Send className="h-5 w-5" />
+            )}
           </Button>
         </div>
+
+        {speechError && (
+          <p className="text-red-500 text-sm mt-2">{speechError}</p>
+        )}
       </div>
     </div>
   );

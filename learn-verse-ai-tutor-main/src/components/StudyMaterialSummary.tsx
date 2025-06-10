@@ -1,4 +1,3 @@
-
 import React, { useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -95,49 +94,45 @@ const StudyMaterialSummary: React.FC<StudyMaterialSummaryProps> = ({ materials }
 
   const generateSummaryWithAI = async (content: string, fileName: string): Promise<Summary> => {
     const prompt = customPrompt || `
-      Please analyze the following study material and create a comprehensive summary. 
-      Provide:
-      1. A clear title
-      2. Main content summary (2-3 paragraphs)
-      3. 5-7 key points
-      4. Difficulty level (Beginner/Intermediate/Advanced)
-      5. Estimated reading time in minutes
-      6. 3-5 relevant topics/tags
+      Please analyze the following study material and create a comprehensive summary. Follow these guidelines:
+      1. Create a clear, concise title that reflects the main topic
+      2. Write a detailed summary (2-3 paragraphs) covering the key concepts
+      3. Extract 5-7 key points that are essential for understanding
+      4. Determine the difficulty level (Beginner/Intermediate/Advanced)
+      5. Estimate reading time in minutes
+      6. Identify 3-5 relevant topics/tags
+      7. Include any important formulas, definitions, or examples
+      8. Highlight any practical applications or real-world connections
 
       Study Material:
       ${content.substring(0, 3000)}...
     `;
 
     try {
-      const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+      const response = await fetch('http://localhost:3001/api/chat', {
         method: 'POST',
         headers: {
-          'Authorization': `Bearer ${GROQ_API_KEY}`,
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          model: 'llama-3.1-8b-instant',
-          messages: [
-            {
-              role: 'system',
-              content: 'You are an educational AI that creates comprehensive study summaries. Always respond in a structured format.'
-            },
-            {
-              role: 'user',
-              content: prompt
-            }
-          ],
-          temperature: 0.7,
-          max_tokens: 1500,
+          message: prompt,
+          agent: 'study',
+          conversationHistory: []
         }),
       });
 
       if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
+        const errorData = await response.json();
+        throw new Error(errorData.details || errorData.error || 'Failed to get response from server');
       }
 
       const data = await response.json();
-      const aiResponse = data.choices[0]?.message?.content || '';
+      
+      if (!data.success || !data.response) {
+        throw new Error('Invalid response format from server');
+      }
+
+      const aiResponse = data.response;
 
       // Parse AI response and create summary object
       return {
@@ -150,7 +145,7 @@ const StudyMaterialSummary: React.FC<StudyMaterialSummaryProps> = ({ materials }
         topics: extractTopics(aiResponse)
       };
     } catch (error) {
-      console.error('Error calling Groq API:', error);
+      console.error('Error calling API:', error);
       return {
         id: Date.now().toString() + Math.random(),
         title: fileName.replace(/\.[^/.]+$/, ''),
