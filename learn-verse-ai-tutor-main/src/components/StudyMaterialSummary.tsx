@@ -37,8 +37,6 @@ const StudyMaterialSummary: React.FC<StudyMaterialSummaryProps> = ({ materials }
   const [progress, setProgress] = useState(0);
   const [customPrompt, setCustomPrompt] = useState('');
 
-  const GROQ_API_KEY = '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';
-
   const generateSummary = async () => {
     if (materials.length === 0) {
       toast.error('Please upload study materials first');

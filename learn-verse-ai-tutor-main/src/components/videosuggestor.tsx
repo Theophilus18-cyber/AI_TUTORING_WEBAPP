@@ -109,7 +109,7 @@ const VideoSuggestions: React.FC<VideoSuggestionsProps> = ({
         },
         body: JSON.stringify({
           message: message,
-          subject: agent === 'coding' ? 'programming' : agent === 'quiz' ? 'educational' : 'learning',
+          subject: getSubjectFromMessage(message, agent),
           conversationHistory: recentHistory,
           agentType: agent
         }),
@@ -144,6 +144,44 @@ const VideoSuggestions: React.FC<VideoSuggestionsProps> = ({
 
   const handleVideoClick = (url: string) => {
     window.open(url, '_blank', 'noopener,noreferrer');
+  };
+
+  // Helper function to determine subject from message and agent type
+  const getSubjectFromMessage = (message: string, agentType: string): string => {
+    const messageLower = message.toLowerCase();
+    
+    // Define subject keywords mapping
+    const subjectKeywords = {
+      'cell biology': ['cell biology', 'cell', 'biology', 'organism', 'dna', 'gene', 'evolution'],
+      'physics': ['newton', 'laws', 'physics', 'physical', 'gravity', 'motion', 'force', 'energy', 'velocity', 'acceleration', 'mass', 'weight'],
+      'chemistry': ['chemistry', 'chemical', 'atoms', 'molecules', 'reaction', 'element', 'compound', 'bond', 'acid', 'base'],
+      'mathematics': ['math', 'mathematics', 'algebra', 'calculus', 'derivatives', 'equations', 'geometry', 'trigonometry', 'statistics'],
+      'programming': ['programming', 'coding', 'python', 'javascript', 'code', 'algorithm', 'function', 'variable', 'software'],
+      'history': ['history', 'historical', 'war', 'battle', 'ancient', 'medieval', 'civilization', 'empire', 'kingdom'],
+      'geography': ['geography', 'geographic', 'country', 'continent', 'ocean', 'mountain', 'climate', 'weather'],
+      'literature': ['literature', 'english', 'writing', 'poetry', 'novel', 'story', 'author', 'book'],
+      'biology': ['photosynthesis', 'plants', 'ecosystem', 'species', 'habitat', 'environment']
+    };
+    
+    // Check for subject matches
+    for (const [subject, keywords] of Object.entries(subjectKeywords)) {
+      if (keywords.some(keyword => messageLower.includes(keyword))) {
+        return subject;
+      }
+    }
+    
+    // Fallback based on agent type
+    switch (agentType) {
+      case 'coding':
+        return 'programming';
+      case 'quiz':
+        return 'educational';
+      case 'study':
+        return 'academic';
+      case 'tutor':
+      default:
+        return 'learning';
+    }
   };
 
   if (!isVisible) {
