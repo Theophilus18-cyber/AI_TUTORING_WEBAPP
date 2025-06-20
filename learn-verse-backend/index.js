@@ -3,6 +3,7 @@ import express from 'express';
 import cors from 'cors';
 import fetch from 'node-fetch';
 import dotenv from 'dotenv';
+import {taskRoutes} from './routes/taskRoutes.js';
 
 dotenv.config();
 
@@ -506,6 +507,8 @@ app.post('/api/suggest-videos', async (req, res) => {
 app.get('/api/health', (req, res) => {
   res.json({ status: 'OK', message: 'YouTube API service is running' });
 });
+
+app.use('/api/tasks', taskRoutes);
 
 app.listen(PORT, () => {
   console.log(`YouTube API service running on port ${PORT}`);
