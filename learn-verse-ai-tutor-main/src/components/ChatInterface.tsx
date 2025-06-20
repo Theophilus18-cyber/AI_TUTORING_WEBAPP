@@ -5,6 +5,7 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { Send, Loader2, User, Mic, MicOff, Volume2, VolumeX, Video, VideoOff } from 'lucide-react';
 import VideoSuggestions from './videosuggestor';
+import TaskInput from './TaskInput';
 
 interface Message {
   id: string;
@@ -35,6 +36,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ agent, isSpeaking, onProg
   // Video suggestions state
   const [showVideoSuggestions, setShowVideoSuggestions] = useState(false);
   const [lastUserMessage, setLastUserMessage] = useState('');
+  const [taskResults, setTaskResults] = useState<any[]>([]);
   
   const scrollAreaRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -454,6 +456,20 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ agent, isSpeaking, onProg
     }
   };
 
+  const handleTaskResult = (result: any) => {
+    setTaskResults(prev => [...prev, result]);
+    
+    // Add task result to chat messages
+    const taskMessage: Message = {
+      id: Date.now().toString(),
+      content: `Task completed: ${result.message}`,
+      sender: 'agent',
+      timestamp: new Date(),
+      agent
+    };
+    setMessages(prev => [...prev, taskMessage]);
+  };
+
   return (
     <div className="flex flex-col h-full">
       <ScrollArea ref={scrollAreaRef} className="flex-1 p-4">
@@ -573,6 +589,18 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ agent, isSpeaking, onProg
         {speechError && (
           <p className="text-red-500 text-sm mt-2">{speechError}</p>
         )}
+        
+        {/* Task Input Section - Backup option for text-based task input */}
+        <div className="mt-12 pt-12 border-t border-gray-200 bg-gray-50 rounded-lg p-6">
+          <div className="flex items-center gap-2 mb-4">
+            <div className="w-2 h-2 bg-orange-500 rounded-full"></div>
+            <p className="text-sm font-medium text-gray-700">Task Automation (Backup)</p>
+          </div>
+          <p className="text-xs text-gray-500 mb-6">
+            Type task instructions here as an alternative to voice commands. Examples: "Download past papers for grade 12 mathematics" or "Search for physics resources"
+          </p>
+          <TaskInput onTaskResult={handleTaskResult} />
+        </div>
       </div>
     </div>
   );

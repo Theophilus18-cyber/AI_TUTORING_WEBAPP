@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Button } from '@/components/ui/button';
-import { Mic, MicOff, Loader2, MessageCircle, X, Volume2 } from 'lucide-react';
+import { Mic, MicOff, Loader2, MessageCircle, X, Volume2, Download, Globe } from 'lucide-react';
 import  Vapi from '@vapi-ai/web';
 
 interface VapiVoiceAssistantProps {
@@ -15,8 +15,104 @@ const VapiVoiceAssistant: React.FC<VapiVoiceAssistantProps> = ({ className }) =>
   const [showRecentMessage, setShowRecentMessage] = useState(false);
   const [transcript, setTranscript] = useState('');
   const [messages, setMessages] = useState<any[]>([]);
+  const [taskStatus, setTaskStatus] = useState<string>('');
+  const [isPerformingTask, setIsPerformingTask] = useState(false);
   
   const vapiRef = useRef<Vapi | null>(null);
+
+  // Task command patterns
+  const taskPatterns = [
+    {
+      pattern: /download.*(?:past papers?|exam papers?|question papers?).*(?:grade|standard)\s*(\d+).*(math|mathematics|english|science|physics|chemistry|biology|history|geography|economics|accounting)/i,
+      type: 'exam_papers',
+      extractParams: (text: string) => {
+        const match = text.match(/grade\s*(\d+).*(math|mathematics|english|science|physics|chemistry|biology|history|geography|economics|accounting)/i);
+        return {
+          grade: match?.[1],
+          subject: match?.[2],
+          year: new Date().getFullYear().toString(),
+          website: 'https://www.education.gov.za/Curriculum/NationalSeniorCertificate(NSC)Examinations.aspx'
+        };
+      }
+    },
+    {
+      pattern: /download.*(?:past papers?|exam papers?|question papers?).*(\d{4}).*(math|mathematics|english|science|physics|chemistry|biology|history|geography|economics|accounting)/i,
+      type: 'exam_papers',
+      extractParams: (text: string) => {
+        const match = text.match(/(\d{4}).*(math|mathematics|english|science|physics|chemistry|biology|history|geography|economics|accounting)/i);
+        return {
+          grade: '12', // Default to grade 12 for year-specific requests
+          subject: match?.[2],
+          year: match?.[1],
+          website: 'https://www.education.gov.za/Curriculum/NationalSeniorCertificate(NSC)Examinations.aspx'
+        };
+      }
+    },
+    {
+      pattern: /search.*(?:for|about).*(math|mathematics|english|science|physics|chemistry|biology|history|geography|economics|accounting).*(?:resources?|materials?|content)/i,
+      type: 'search_resources',
+      extractParams: (text: string) => {
+        const match = text.match(/(math|mathematics|english|science|physics|chemistry|biology|history|geography|economics|accounting)/i);
+        return {
+          subject: match?.[1],
+          customQuery: `educational resources for ${match?.[1]}`,
+          website: 'https://www.google.com'
+        };
+      }
+    }
+  ];
+
+  const detectTaskCommand = (text: string) => {
+    for (const taskPattern of taskPatterns) {
+      if (taskPattern.pattern.test(text)) {
+        return {
+          type: taskPattern.type,
+          params: taskPattern.extractParams(text),
+          originalText: text
+        };
+      }
+    }
+    return null;
+  };
+
+  const performGobiiTask = async (taskCommand: any) => {
+    setIsPerformingTask(true);
+    setTaskStatus('Starting task...');
+    
+    try {
+      const response = await fetch('http://localhost:3001/api/tasks/perform', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          input: taskCommand.originalText,
+          taskType: taskCommand.type,
+          ...taskCommand.params
+        }),
+      });
+      
+      const data = await response.json();
+      
+      if (!response.ok) {
+        throw new Error(data.error || 'Task failed');
+      }
+      
+      setTaskStatus(data.success ? 'Task completed successfully!' : 'Task did not complete as expected.');
+      
+      // Add task result to messages
+      setMessages(prev => [...prev, {
+        role: 'assistant',
+        content: `I've ${taskCommand.type === 'exam_papers' ? 'downloaded' : 'searched for'} ${taskCommand.params.subject} ${taskCommand.type === 'exam_papers' ? `past papers for grade ${taskCommand.params.grade} (${taskCommand.params.year})` : 'resources'}. ${data.links?.length ? `Found ${data.links.length} files.` : ''}`
+      }]);
+      
+      return data;
+    } catch (error: any) {
+      setTaskStatus(`Task failed: ${error.message}`);
+      setError(`Task failed: ${error.message}`);
+      throw error;
+    } finally {
+      setIsPerformingTask(false);
+    }
+  };
 
   useEffect(() => {
     // Initialize Vapi with API key
@@ -28,7 +124,18 @@ const VapiVoiceAssistant: React.FC<VapiVoiceAssistantProps> = ({ className }) =>
     vapiRef.current.on('speech-start', () => setTranscript(''));
     vapiRef.current.on('speech-end', () => setTranscript(''));
     vapiRef.current.on('volume-level', () => {});
-    vapiRef.current.on('message', (message) => setMessages(prev => [...prev, message]));
+    vapiRef.current.on('message', (message) => {
+      setMessages(prev => [...prev, message]);
+      
+      // Check if the message contains a task command
+      if (message.role === 'user' && message.content) {
+        const taskCommand = detectTaskCommand(message.content);
+        if (taskCommand) {
+          // Automatically trigger the task
+          performGobiiTask(taskCommand).catch(console.error);
+        }
+      }
+    });
     vapiRef.current.on('error', (error) => setError(error.message));
 
     return () => {
@@ -86,16 +193,20 @@ const VapiVoiceAssistant: React.FC<VapiVoiceAssistantProps> = ({ className }) =>
         onClick={toggleListening}
         onMouseEnter={() => setShowTooltip(true)}
         onMouseLeave={() => setShowTooltip(false)}
-        disabled={isLoading}
+        disabled={isLoading || isPerformingTask}
         className={`w-16 h-16 rounded-full shadow-lg transition-all duration-300 hover:scale-110 ${
           isListening 
             ? 'bg-red-500 hover:bg-red-600 animate-pulse' 
+            : isPerformingTask
+            ? 'bg-orange-500 hover:bg-orange-600'
             : 'bg-blue-500 hover:bg-blue-600'
         }`}
         size="icon"
       >
         {isLoading ? (
           <Loader2 className="w-6 h-6 animate-spin text-white" />
+        ) : isPerformingTask ? (
+          <Globe className="w-6 h-6 text-white animate-pulse" />
         ) : isListening ? (
           <MicOff className="w-6 h-6 text-white" />
         ) : (
@@ -107,14 +218,28 @@ const VapiVoiceAssistant: React.FC<VapiVoiceAssistantProps> = ({ className }) =>
       {isListening && (
         <div className="absolute -top-2 -right-2 w-4 h-4 bg-green-500 rounded-full animate-pulse"></div>
       )}
+      {isPerformingTask && (
+        <div className="absolute -top-2 -right-2 w-4 h-4 bg-orange-500 rounded-full animate-pulse"></div>
+      )}
 
       {/* Tooltip */}
-      {showTooltip && !isListening && !error && (
+      {showTooltip && !isListening && !error && !isPerformingTask && (
         <div className="absolute bottom-20 right-0 bg-gray-800 text-white text-xs rounded-lg p-2 transition-all duration-300">
           <div className="flex items-center gap-2">
             <Volume2 className="w-3 h-3" />
-            <span>Ask Riley about LearnVerse features</span>
+            <span>Ask Riley about LearnVerse features or say "download past papers"</span>
           </div>
+        </div>
+      )}
+
+      {/* Task status */}
+      {isPerformingTask && taskStatus && (
+        <div className="absolute bottom-20 right-0 bg-orange-50 border border-orange-200 rounded-lg p-3 max-w-xs shadow-lg">
+          <div className="flex items-center gap-2 mb-2">
+            <Globe className="w-4 h-4 text-orange-500 animate-pulse" />
+            <p className="text-sm font-medium text-orange-700">Performing Task</p>
+          </div>
+          <p className="text-sm text-orange-600">{taskStatus}</p>
         </div>
       )}
 
@@ -170,14 +295,14 @@ const VapiVoiceAssistant: React.FC<VapiVoiceAssistantProps> = ({ className }) =>
       )}
 
       {/* Welcome message for first-time users */}
-      {!isListening && !error && !showRecentMessage && messages && messages.length === 0 && (
+      {!isListening && !error && !showRecentMessage && !isPerformingTask && messages && messages.length === 0 && (
         <div className="absolute bottom-20 right-0 bg-blue-50 border border-blue-200 rounded-lg p-3 max-w-xs shadow-lg">
           <div className="flex items-center gap-2 mb-2">
             <MessageCircle className="w-4 h-4 text-blue-500" />
             <p className="text-sm font-medium text-blue-700">Welcome!</p>
           </div>
           <p className="text-sm text-blue-600">
-            Click the microphone to ask Riley about LearnVerse AI Tutor features
+            Click the microphone to ask Riley about LearnVerse features or say "download past papers for grade 12 mathematics"
           </p>
         </div>
       )}
